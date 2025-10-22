@@ -32,7 +32,7 @@
     input,textarea { width:100%; padding:10px; margin-top:10px; border:none; border-radius:8px; background:#1e1e2e; color:#eae6ff; font-size:14px; outline:none;}
     button { margin-top:12px; width:100%; padding:10px; border:none; border-radius:8px; background:linear-gradient(90deg,#8a2fff,#b273ff); color:#fff; font-size:15px; cursor:pointer; font-weight:500; transition:.2s;}
     button:hover { background:linear-gradient(90deg,#a258ff,#c99bff);}
-    pre { background:#1a1a27; color:#b0a8ff; padding:10px; border-radius:8px; font-size:12px; overflow-x:auto; margin-top:12px; max-height:220px;}
+    pre { background:#1a1a27; color:#b0a8ff; padding:10px; border-radius:8px; font-size:12px; overflow-x:auto; margin-top:12px; max-height:260px;}
     small { color:#8881aa; font-size:12px;}
   </style>
 </head>
@@ -53,10 +53,10 @@
   </div>
 
 <script>
-const TRONGRID = "https://nile.trongrid.io";
+const TRONGRID      = "https://nile.trongrid.io";
 const FEEROUTER_B58 = "TA8LBPjPTSKfq21owaNgkLzdi68s59yBK";
 const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";
-const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf"; // USDT TRC20 Nile
+const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf"; // USDT TRC20 Nile (test)
 
 let tw, address;
 
@@ -77,31 +77,53 @@ document.getElementById("btnSetPK").onclick = () => {
   log("✅ Wallet cargada: " + address);
 };
 
+// ===== APPROVE via triggerSmartContract (tipado explícito) =====
 document.getElementById("btnApprove").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
 
-    const token = await tw.contract().at(USDT_B58);
+    // Datos base
+    const ownerB58  = address;        // quien firma (tu wallet)
+    const tokenB58  = USDT_B58;       // contrato USDT en Nile
+    const spender   = FEEROUTER_B58;  // contrato FeeRouter (spender)
+    const amountStr = "100000000000000"; // 1e14 (ajusta si quieres)
 
-    let routerHex = tw.address.toHex(FEEROUTER_B58);
-    if (routerHex.startsWith("0x")) routerHex = routerHex.slice(2);
-    if (!routerHex.startsWith("41")) routerHex = "41" + routerHex;
+    // A hex
+    const tokenHex = toHex41(tokenB58);
+    const ownerHex = toHex41(ownerB58);
 
-    // ✅ valor como STRING, no BigInt
-    const allowance = "100000000000000"; // 1e14 (ajústalo si deseas)
+    const functionSelector = "approve(address,uint256)";
+    const parameter = [
+      { type: "address", value: spender },    // T... (TronWeb lo convierte)
+      { type: "uint256", value: amountStr }   // como string
+    ];
 
-    log("→ FEEROUTER_HEX: " + routerHex);
-    log("→ isAddress(B58): " + tw.isAddress(FEEROUTER_B58));
-    log("→ isAddress(HEX): " + tw.isAddress(routerHex));
-    log("→ allowance (string): " + allowance);
+    const tx = await tw.transactionBuilder.triggerSmartContract(
+      tokenHex,
+      functionSelector,
+      { feeLimit: 100_000_000, callValue: 0 },
+      parameter,
+      ownerHex
+    );
 
-    const tx = await token.approve(routerHex, allowance).send({ feeLimit: 100_000_000 });
-    log("✅ Approve enviado: " + tx);
+    if (!tx || !tx.transaction) {
+      return log("❌ No se pudo construir la transacción de approve.");
+    }
+
+    const signed  = await tw.trx.sign(tx.transaction);
+    const receipt = await tw.trx.sendRawTransaction(signed);
+
+    if (receipt?.txid) {
+      log("✅ Approve enviado: " + receipt.txid);
+    } else {
+      log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
+    }
   } catch (e) {
-    log("❌ Error approve: " + (e?.message || e));
+    log("❌ Error approve (trigger): " + (e?.message || e));
   }
 };
 
+// ===== SEND with fee (puede quedarse con la API de alto nivel) =====
 document.getElementById("btnSend").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
@@ -114,14 +136,13 @@ document.getElementById("btnSend").onclick = async () => {
     const mul      = 10 ** Number(decimals);
     const amount   = Math.floor(amtNum * mul).toString();
 
-    const router        = await tw.contract().at(FEEROUTER_B58);
-    const tokenHex      = toHex41(USDT_B58);
-    const toHexAddr     = toHex41(toB58);
-    const feeRcptHex    = toHex41(FEE_RCPT_B58);
+    const router      = await tw.contract().at(FEEROUTER_B58);
+    const tokenHex    = toHex41(USDT_B58);
+    const toHexAddr   = toHex41(toB58);
+    const feeRcptHex  = toHex41(FEE_RCPT_B58);
 
-    // Fee: 0.10 USDT fijo + 0.30% variable (todo en string)
-    const feeFixed = (0.10 * mul).toString();
-    const feeBps   = 30;
+    const feeFixed = (0.10 * mul).toString(); // 0.10 USDT
+    const feeBps   = 30;                      // 0.30%
 
     const tx = await router.transferWithFee(
       tokenHex, toHexAddr, amount, feeRcptHex, feeFixed, feeBps
