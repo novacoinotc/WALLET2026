@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MVP TRON Gas-Free</title>
 
-  <!-- Polyfills antes de TronWeb -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js?v=3"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js?v=3"></script>
+  <!-- Polyfills -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js"></script>
   <script>
     (function (g) {
       g.global = g.global || g;
@@ -22,8 +22,8 @@
     })(window);
   </script>
 
-  <!-- TronWeb v4 (estable para navegador) -->
-  <script src="https://cdn.jsdelivr.net/npm/tronweb@4.4.0/dist/TronWeb.js?v=4"></script>
+  <!-- TronWeb -->
+  <script src="https://cdn.jsdelivr.net/npm/tronweb@4.4.0/dist/TronWeb.js"></script>
 
   <style>
     body { background:#0b0b14; color:#eae6ff; font-family:Inter,system-ui,sans-serif; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; min-height:100vh; justify-content:center;}
@@ -53,19 +53,15 @@
   </div>
 
 <script>
-/** Config Nile */
 const TRONGRID      = "https://nile.trongrid.io";
-const FEEROUTER_B58 = "TYKkNr46PyfAYzZwJo65sfwKo89USbryqB";            // contrato FeeRouter (T…)
-const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";            // tu cuenta que recibe fee (T…)
-const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf";            // USDT (test) en Nile (T…)
+const FEEROUTER_B58 = "TYKkNr46PyfAYzZwJo65sfwKo89USbryqB"; // nuevo contrato FeeRouter
+const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL"; // fee recipient
+const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf"; // USDT Nile
 
-/** Estado */
 let tw, address;
 
-/** Utils UI */
 function log(msg){ document.getElementById("log").textContent += "\n" + msg; }
 
-/** Inicializar wallet (no custodial en el navegador) */
 document.getElementById("btnSetPK").onclick = () => {
   const pk = document.getElementById("pk").value.trim();
   if (!pk) return log("⚠️ Ingresa una Private Key de testnet.");
@@ -74,33 +70,34 @@ document.getElementById("btnSetPK").onclick = () => {
   log("✅ Wallet cargada: " + address);
 };
 
-/** Handler: Approve USDT -> FeeRouter (tipado con triggerSmartContract y direcciones T...) */
+// ----------- APROBAR USDT -> FEEROUTER -----------
 document.getElementById("btnApprove").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
 
-    const ownerB58   = address;           // tu wallet T...
-    const tokenB58   = USDT_B58;          // contrato USDT en Nile (T…)
-    const spenderB58 = FEEROUTER_B58;     // FeeRouter (T…)
-    const amountStr  = "100000000000000"; // 1e14 (ajusta si quieres)
-
-    // Diagnóstico
-    log("→ isAddress(owner): "  + tw.isAddress(ownerB58));
-    log("→ isAddress(token): "  + tw.isAddress(tokenB58));
-    log("→ isAddress(spender): "+ tw.isAddress(spenderB58));
-
+    const ownerB58   = address;
+    const tokenB58   = USDT_B58;
+    const amountStr  = "100000000000000"; // 1e14
     const functionSelector = "approve(address,uint256)";
+
+    // convertir FeeRouter a hex (seguro para Nile)
+    let spenderHex = tw.address.toHex(FEEROUTER_B58);
+    if (spenderHex.startsWith("0x")) spenderHex = spenderHex.slice(2);
+    if (!spenderHex.startsWith("41")) spenderHex = "41" + spenderHex;
+
+    log("→ FeeRouter HEX: " + spenderHex);
+
     const parameter = [
-      { type: "address", value: spenderB58 }, // pasamos Base58 (TronWeb codifica)
-      { type: "uint256", value: amountStr }   // string
+      { type: "address", value: spenderHex }, // hex evita error de validación
+      { type: "uint256", value: amountStr }
     ];
 
     const tx = await tw.transactionBuilder.triggerSmartContract(
-      tokenB58,                               // contrato en Base58
+      tokenB58,
       functionSelector,
       { feeLimit: 100_000_000, callValue: 0 },
       parameter,
-      ownerB58                                // caller en Base58
+      ownerB58
     );
 
     if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de approve.");
@@ -115,7 +112,7 @@ document.getElementById("btnApprove").onclick = async () => {
   }
 };
 
-/** Handler: Enviar con comisión usando FeeRouter (triggerSmartContract) */
+// ----------- ENVIAR CON COMISIÓN -----------
 document.getElementById("btnSend").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
@@ -123,33 +120,30 @@ document.getElementById("btnSend").onclick = async () => {
     const amtNum = parseFloat(document.getElementById("amt").value || "0");
     if (!toB58 || !amtNum) return log("⚠️ Ingresa destino y monto.");
 
-    // Leer decimales desde el contrato USDT
     const token   = await tw.contract().at(USDT_B58);
     const dec     = await token.decimals().call();
     const mul     = 10 ** Number(dec);
     const amount  = Math.floor(amtNum * mul).toString();
 
-    // Fee: 0.10 USDT fijo + 0.30% variable
-    const feeFixed = Math.floor(0.10 * mul).toString(); // como string
-    const feeBps   = 30;                                // uint16
+    const feeFixed = Math.floor(0.10 * mul).toString();
+    const feeBps   = 30;
 
-    // Parámetros del método transferWithFee(address,address,uint256,address,uint256,uint16)
     const functionSelector = "transferWithFee(address,address,uint256,address,uint256,uint16)";
     const parameter = [
-      { type: "address", value: USDT_B58 },    // token (T…)
-      { type: "address", value: toB58 },       // destinatario (T…)
-      { type: "uint256", value: amount },      // monto en unidades mínimas (string)
-      { type: "address", value: FEE_RCPT_B58 },// fee recipient (T…)
-      { type: "uint256", value: feeFixed },    // fijo en unidades mínimas (string)
-      { type: "uint16",  value: feeBps }       // basis points (número)
+      { type: "address", value: USDT_B58 },
+      { type: "address", value: toB58 },
+      { type: "uint256", value: amount },
+      { type: "address", value: FEE_RCPT_B58 },
+      { type: "uint256", value: feeFixed },
+      { type: "uint16",  value: feeBps }
     ];
 
     const tx = await tw.transactionBuilder.triggerSmartContract(
-      FEEROUTER_B58,                           // contrato FeeRouter en Base58
+      FEEROUTER_B58,
       functionSelector,
       { feeLimit: 100_000_000, callValue: 0 },
       parameter,
-      address                                  // tu wallet (Base58)
+      address
     );
 
     if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de envío.");
