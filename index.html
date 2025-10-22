@@ -5,78 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MVP TRON Gas-Free</title>
 
-  <!-- 🔹 Primero cargamos Buffer, luego TronWeb -->
+  <!-- 🔹 Polyfills obligatorios ANTES de TronWeb -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js"></script>
   <script>
-    window.global = window; // TronWeb requiere 'global'
-    window.Buffer = buffer.Buffer;
+    // Asegura globals que TronWeb espera en navegador
+    (function () {
+      const g = window;            // globalThis
+      g.global = g.global || g;    // algunos módulos esperan 'global'
+      g.process = g.process || { env: {} };
+      if (!g.Buffer) {
+        // cdnjs expone 'buffer.Buffer'
+        if (g.buffer && g.buffer.Buffer) g.Buffer = g.buffer.Buffer;
+      }
+    })();
   </script>
+
+  <!-- 🔹 TronWeb (después de los polyfills) -->
   <script src="https://cdn.jsdelivr.net/npm/tronweb@5.3.0/dist/TronWeb.js"></script>
 
   <style>
-    body {
-      background-color: #0b0b14;
-      color: #eae6ff;
-      font-family: "Inter", system-ui, sans-serif;
-      margin: 0; padding: 0;
-      display: flex; flex-direction: column; align-items: center;
-      min-height: 100vh; justify-content: center;
-    }
-    h1 {
-      color: #b276ff;
-      font-size: 2rem;
-      margin-bottom: 0.5rem;
-    }
-    .card {
-      background: #141424;
-      border: 1px solid #32294d;
-      border-radius: 16px;
-      padding: 24px;
-      width: 95%;
-      max-width: 480px;
-      box-shadow: 0 0 25px rgba(138, 77, 255, 0.15);
-    }
-    input, textarea {
-      width: 100%;
-      padding: 10px;
-      margin-top: 10px;
-      border: none;
-      border-radius: 8px;
-      background: #1e1e2e;
-      color: #eae6ff;
-      font-size: 14px;
-      outline: none;
-    }
-    button {
-      margin-top: 12px;
-      width: 100%;
-      padding: 10px;
-      border: none;
-      border-radius: 8px;
-      background: linear-gradient(90deg, #8a2fff, #b273ff);
-      color: #fff;
-      font-size: 15px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: 0.2s;
-    }
-    button:hover {
-      background: linear-gradient(90deg, #a258ff, #c99bff);
-    }
-    pre {
-      background: #1a1a27;
-      color: #b0a8ff;
-      padding: 10px;
-      border-radius: 8px;
-      font-size: 12px;
-      overflow-x: auto;
-      margin-top: 12px;
-      max-height: 180px;
-    }
-    small {
-      color: #8881aa;
-      font-size: 12px;
-    }
+    body { background:#0b0b14; color:#eae6ff; font-family:Inter,system-ui,sans-serif; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; min-height:100vh; justify-content:center;}
+    h1 { color:#b276ff; font-size:2rem; margin-bottom:.5rem;}
+    .card { background:#141424; border:1px solid #32294d; border-radius:16px; padding:24px; width:95%; max-width:480px; box-shadow:0 0 25px rgba(138,77,255,.15);}
+    input,textarea { width:100%; padding:10px; margin-top:10px; border:none; border-radius:8px; background:#1e1e2e; color:#eae6ff; font-size:14px; outline:none;}
+    button { margin-top:12px; width:100%; padding:10px; border:none; border-radius:8px; background:linear-gradient(90deg,#8a2fff,#b273ff); color:#fff; font-size:15px; cursor:pointer; font-weight:500; transition:.2s;}
+    button:hover { background:linear-gradient(90deg,#a258ff,#c99bff);}
+    pre { background:#1a1a27; color:#b0a8ff; padding:10px; border-radius:8px; font-size:12px; overflow-x:auto; margin-top:12px; max-height:180px;}
+    small { color:#8881aa; font-size:12px;}
   </style>
 </head>
 <body>
@@ -98,16 +54,14 @@
 <script>
 const TRONGRID = "https://nile.trongrid.io";
 const FEEROUTER = "TA8LBPjPTSKfq21owaNgkLzdi68s59yBK";
-const FEE_RCPT = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";
-const USDT = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"; // USDT TRC20 Nile
+const FEE_RCPT  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";
+const USDT      = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"; // USDT TRC20 Nile
 
 let tw, address;
 
-function log(msg) {
-  document.getElementById("log").textContent += "\n" + msg;
-}
+function log(msg){ document.getElementById("log").textContent += "\n" + msg; }
 
-document.getElementById("btnSetPK").onclick = async () => {
+document.getElementById("btnSetPK").onclick = () => {
   const pk = document.getElementById("pk").value.trim();
   if (!pk) return log("⚠️ Ingresa una Private Key de testnet.");
   tw = new TronWeb({ fullHost: TRONGRID, privateKey: pk });
@@ -117,27 +71,31 @@ document.getElementById("btnSetPK").onclick = async () => {
 
 document.getElementById("btnApprove").onclick = async () => {
   try {
+    if (!tw) return log("⚠️ Carga primero la Private Key.");
     const token = await tw.contract().at(USDT);
-    const allowance = BigInt(1_000_000_000_000_000);
+    const allowance = BigInt(1_000_000_000_000_000); // grande por MVP
     const tx = await token.approve(FEEROUTER, allowance).send();
     log("✅ Approve enviado: " + tx);
   } catch (e) {
-    log("❌ Error approve: " + e.message);
+    log("❌ Error approve: " + (e && e.message ? e.message : e));
   }
 };
 
 document.getElementById("btnSend").onclick = async () => {
   try {
-    const to = document.getElementById("to").value.trim();
-    const amt = parseFloat(document.getElementById("amt").value);
+    if (!tw) return log("⚠️ Carga primero la Private Key.");
+    const to  = document.getElementById("to").value.trim();
+    const amt = parseFloat(document.getElementById("amt").value || "0");
+    if (!to || !amt) return log("⚠️ Ingresa destino y monto.");
+
     const token = await tw.contract().at(USDT);
-    const dec = await token.decimals().call();
-    const mul = 10 ** Number(dec);
+    const dec   = await token.decimals().call();
+    const mul   = 10 ** Number(dec);
     const amount = BigInt(Math.floor(amt * mul));
 
     const router = await tw.contract().at(FEEROUTER);
-    const feeFixed = BigInt(10) * BigInt(mul) / BigInt(100);
-    const feeBps = 30;
+    const feeFixed = BigInt(10) * BigInt(mul) / BigInt(100); // 0.10 USDT
+    const feeBps   = 30; // 0.30%
 
     const tx = await router.transferWithFee(
       USDT, to, amount, FEE_RCPT, feeFixed, feeBps
@@ -145,7 +103,7 @@ document.getElementById("btnSend").onclick = async () => {
 
     log("✅ Envío completado. TxID: " + tx);
   } catch (e) {
-    log("❌ Error envío: " + e.message);
+    log("❌ Error envío: " + (e && e.message ? e.message : e));
   }
 };
 </script>
