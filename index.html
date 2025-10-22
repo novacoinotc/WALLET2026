@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MVP TRON Gas-Free</title>
 
-  <!-- 🔹 Polyfill para Buffer y TronWeb -->
+  <!-- 🔹 Primero cargamos Buffer, luego TronWeb -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js"></script>
-  <script>window.Buffer = buffer.Buffer;</script>
+  <script>
+    window.global = window; // TronWeb requiere 'global'
+    window.Buffer = buffer.Buffer;
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/tronweb@5.3.0/dist/TronWeb.js"></script>
 
   <style>
@@ -115,7 +118,7 @@ document.getElementById("btnSetPK").onclick = async () => {
 document.getElementById("btnApprove").onclick = async () => {
   try {
     const token = await tw.contract().at(USDT);
-    const allowance = BigInt(1_000_000_000_000_000); // grande por MVP
+    const allowance = BigInt(1_000_000_000_000_000);
     const tx = await token.approve(FEEROUTER, allowance).send();
     log("✅ Approve enviado: " + tx);
   } catch (e) {
@@ -133,8 +136,8 @@ document.getElementById("btnSend").onclick = async () => {
     const amount = BigInt(Math.floor(amt * mul));
 
     const router = await tw.contract().at(FEEROUTER);
-    const feeFixed = BigInt(10) * BigInt(mul) / BigInt(100); // 0.10 USDT
-    const feeBps = 30; // 0.30%
+    const feeFixed = BigInt(10) * BigInt(mul) / BigInt(100);
+    const feeBps = 30;
 
     const tx = await router.transferWithFee(
       USDT, to, amount, FEE_RCPT, feeFixed, feeBps
