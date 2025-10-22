@@ -5,24 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>MVP TRON Gas-Free</title>
 
-  <!-- 🔹 Polyfills obligatorios ANTES de TronWeb -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js"></script>
+  <!-- 🔹 Polyfills ANTES de TronWeb (con cache-bust) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js?v=2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js?v=2"></script>
   <script>
-    // Asegura globals que TronWeb espera en navegador
-    (function () {
-      const g = window;            // globalThis
-      g.global = g.global || g;    // algunos módulos esperan 'global'
-      g.process = g.process || { env: {} };
-      if (!g.Buffer) {
-        // cdnjs expone 'buffer.Buffer'
-        if (g.buffer && g.buffer.Buffer) g.Buffer = g.buffer.Buffer;
+    (function (g) {
+      g.global = g.global || g;              // algunas libs esperan 'global'
+      g.process = g.process || { env: {} };  // shim simple de process
+      const B = (g.buffer && g.buffer.Buffer) || g.Buffer;
+      if (B) {
+        g.Buffer = B;
+        if (!g.Buffer.from)   g.Buffer.from   = function(a, e){ return B.from(a, e); };
+        if (!g.Buffer.alloc)  g.Buffer.alloc  = function(n){ return B.alloc(n); };
+        if (!g.Buffer.isBuffer) g.Buffer.isBuffer = function(x){ return B.isBuffer(x); };
       }
-    })();
+    })(window);
   </script>
 
-  <!-- 🔹 TronWeb (después de los polyfills) -->
-  <script src="https://cdn.jsdelivr.net/npm/tronweb@5.3.0/dist/TronWeb.js"></script>
+  <!-- 🔹 TronWeb (después de polyfills; cache-bust) -->
+  <script src="https://cdn.jsdelivr.net/npm/tronweb@5.3.0/dist/TronWeb.js?v=2"></script>
 
   <style>
     body { background:#0b0b14; color:#eae6ff; font-family:Inter,system-ui,sans-serif; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; min-height:100vh; justify-content:center;}
