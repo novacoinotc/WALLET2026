@@ -1,90 +1,165 @@
-import TronWeb from "tronweb";
-import solc from "solc";
-import fs from "fs";
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MVP TRON Gas-Free — Mainnet</title>
 
-// 🔐 Secrets (Replit → Secrets)
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const RPC_URL = process.env.RPC_URL || "https://api.trongrid.io"; // MAINNET
+  <!-- Polyfills antes de TronWeb -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js?v=3"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js?v=3"></script>
+  <script>
+    (function (g) {
+      g.global = g.global || g;
+      g.process = g.process || { env: {} };
+      const B = (g.buffer && g.buffer.Buffer) || g.Buffer;
+      if (B) {
+        g.Buffer = B;
+        if (!g.Buffer.from) g.Buffer.from = function(a, e){ return B.from(a, e); };
+        if (!g.Buffer.alloc) g.Buffer.alloc = function(n){ return B.alloc(n); };
+        if (!g.Buffer.isBuffer) g.Buffer.isBuffer = function(x){ return B.isBuffer(x); };
+      }
+    })(window);
+  </script>
 
-if (!PRIVATE_KEY) throw new Error("Falta PRIVATE_KEY en Secrets");
+  <!-- TronWeb (v4 estable en navegador) -->
+  <script src="https://cdn.jsdelivr.net/npm/tronweb@4.4.0/dist/TronWeb.js?v=4"></script>
 
-// TronWeb
-const tronWeb = new TronWeb({ fullHost: RPC_URL, privateKey: PRIVATE_KEY });
-const addr = tronWeb.address.fromPrivateKey(PRIVATE_KEY);
-console.log("Mi address (MAINNET):", addr);
+  <style>
+    body { background:#0b0b14; color:#eae6ff; font-family:Inter,system-ui,sans-serif; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; min-height:100vh; justify-content:center;}
+    h1 { color:#b276ff; font-size:2rem; margin-bottom:.5rem;}
+    .card { background:#141424; border:1px solid #32294d; border-radius:16px; padding:24px; width:95%; max-width:480px; box-shadow:0 0 25px rgba(138,77,255,.15);}
+    input,textarea { width:100%; padding:10px; margin-top:10px; border:none; border-radius:8px; background:#1e1e2e; color:#eae6ff; font-size:14px; outline:none;}
+    button { margin-top:12px; width:100%; padding:10px; border:none; border-radius:8px; background:linear-gradient(90deg,#8a2fff,#b273ff); color:#fff; font-size:15px; cursor:pointer; font-weight:500; transition:.2s;}
+    button:hover { background:linear-gradient(90deg,#a258ff,#c99bff);}
+    pre { background:#1a1a27; color:#b0a8ff; padding:10px; border-radius:8px; font-size:12px; overflow-x:auto; margin-top:12px; max-height:260px;}
+    small { color:#8881aa; font-size:12px;}
+  </style>
+</head>
+<body>
+  <h1>MVP TRON Gas-Free — Mainnet</h1>
+  <div class="card">
+    <small>Versión de prueba en TRON Mainnet</small>
 
-// --- Contrato FeeRouter ---
-const source = `
-pragma solidity ^0.8.20;
-interface ITRC20 {
-    function transfer(address to, uint256 value) external returns (bool);
-    function transferFrom(address from, address to, uint256 value) external returns (bool);
-    function approve(address spender, uint256 value) external returns (bool);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function balanceOf(address owner) external view returns (uint256);
-    function decimals() external view returns (uint8);
-}
-contract FeeRouter {
-    event TransferWithFee(address indexed token, address indexed from, address indexed to,
-        uint256 amount, address feeRecipient, uint256 feeAmount);
-    function transferWithFee(address token, address to, uint256 amount, address feeRecipient,
-        uint256 feeFixed, uint16 feeBps) external returns (bool) {
-        require(to != address(0) && feeRecipient != address(0) && amount > 0, "invalid params");
-        ITRC20 t = ITRC20(token);
-        uint256 feeVariable = (amount * uint256(feeBps)) / 10_000;
-        uint256 feeAmount = feeFixed + feeVariable;
-        uint256 need = amount + feeAmount;
-        require(t.allowance(msg.sender, address(this)) >= need, "allowance low");
-        if (feeAmount > 0) require(t.transferFrom(msg.sender, feeRecipient, feeAmount));
-        require(t.transferFrom(msg.sender, to, amount));
-        emit TransferWithFee(token, msg.sender, to, amount, feeRecipient, feeAmount);
-        return true;
-    }
-}
-`;
+    <textarea id="pk" placeholder="Pega aquí tu Private Key de mainnet (solo para pruebas)"></textarea>
+    <button id="btnSetPK">Usar Private Key</button>
 
-// Compilar con solc
-const input = {
-  language: "Solidity",
-  sources: { "FeeRouter.sol": { content: source } },
-  settings: { outputSelection: { "*": { "*": ["abi", "evm.bytecode"] } } },
+    <input id="to" placeholder="Dirección destino (T...)" />
+    <input id="amt" placeholder="Monto USDT (ej. 5.25)" />
+    <button id="btnApprove">1️⃣ Aprobar USDT al FeeRouter</button>
+    <button id="btnSend">2️⃣ Enviar con comisión</button>
+
+    <pre id="log"></pre>
+  </div>
+
+<script>
+/** Config Mainnet */
+const TRONGRID      = "https://api.trongrid.io";
+const FEEROUTER_B58 = "TEmrxRCV7f6qfDNB0u2dg81DhYNVxszsNq"; // FeeRouter (mainnet)
+const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL"; // tu cuenta fee (mainnet)
+const USDT_B58      = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"; // USDT TRC20 (mainnet)
+
+let tw, address;
+
+function log(msg){ document.getElementById("log").textContent += "\n" + msg; }
+
+document.getElementById("btnSetPK").onclick = () => {
+  const pk = document.getElementById("pk").value.trim();
+  if (!pk) return log("⚠️ Ingresa una Private Key.");
+  tw = new TronWeb({ fullHost: TRONGRID, privateKey: pk });
+  address = tw.address.fromPrivateKey(pk);
+  log("✅ Wallet cargada: " + address);
 };
-const output = JSON.parse(solc.compile(JSON.stringify(input)));
-if (output.errors) {
-  const fatal = output.errors.find((e) => e.severity === "error");
-  if (fatal) throw new Error(fatal.formattedMessage);
-}
-const artifact = output.contracts["FeeRouter.sol"]["FeeRouter"];
-const abi = artifact.abi;
-const bytecode = "0x" + artifact.evm.bytecode.object;
 
-// Guardar ABI (referencia)
-fs.writeFileSync("FeeRouter_ABI.json", JSON.stringify(abi, null, 2));
-console.log("ABI guardado en FeeRouter_ABI.json ✅");
-
-// Deploy
-(async () => {
+/** APPROVE (con triggerSmartContract; spender en HEX para evitar validación) */
+document.getElementById("btnApprove").onclick = async () => {
   try {
-    console.log("🔹 Preparando recursos (freeze 300 TRX → ENERGY)...");
-    try {
-      // 300 TRX = 300_000_000 SUN
-      await tronWeb.trx.freezeBalanceV2(300_000_000, "ENERGY");
-      console.log("✅ ENERGY asignada (freeze ok)");
-    } catch (e) {
-      console.log("⚠️ No se pudo hacer freeze (continuo si ya tienes recursos):", e?.message || e);
-    }
+    if (!tw) return log("⚠️ Carga primero la Private Key.");
 
-    console.log("🔹 Desplegando FeeRouter en MAINNET...");
-    const instance = await tronWeb.contract().new({
-      abi,
-      bytecode,
-      feeLimit: 100_000_000, // 100 TRX límite
-    });
+    const ownerB58   = address;
+    const tokenB58   = USDT_B58;
+    const amountStr  = "1000000"; // 1e6 = 1 USDT (ajusta si quieres); string
 
-    console.log("✅ Deploy ok");
-    console.log("📄 Dirección del contrato (hex):", instance.address);
-    console.log("📄 Dirección del contrato (T...):", tronWeb.address.fromHex(instance.address));
+    // Convertir FeeRouter a HEX 41... (string sin 0x)
+    let spenderHex = tw.address.toHex(FEEROUTER_B58);
+    if (spenderHex.startsWith("0x")) spenderHex = spenderHex.slice(2);
+    if (!spenderHex.startsWith("41")) spenderHex = "41" + spenderHex;
+
+    log("→ FeeRouter HEX: " + spenderHex);
+
+    const functionSelector = "approve(address,uint256)";
+    const parameter = [
+      { type: "address", value: spenderHex },  // usar hex evita 'Invalid address'
+      { type: "uint256", value: amountStr }
+    ];
+
+    const tx = await tw.transactionBuilder.triggerSmartContract(
+      tokenB58,                                // contrato USDT en Base58
+      functionSelector,
+      { feeLimit: 100_000_000, callValue: 0 },
+      parameter,
+      ownerB58                                 // caller en Base58
+    );
+
+    if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de approve.");
+
+    const signed  = await tw.trx.sign(tx.transaction);
+    const receipt = await tw.trx.sendRawTransaction(signed);
+
+    if (receipt?.txid) log("✅ Approve enviado (mainnet): " + receipt.txid);
+    else log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
   } catch (e) {
-    console.error("❌ Error en deploy:", e);
+    log("❌ Error approve: " + (e?.message || e));
   }
-})();
+};
+
+/** SEND con comisión (transferWithFee) */
+document.getElementById("btnSend").onclick = async () => {
+  try {
+    if (!tw) return log("⚠️ Carga primero la Private Key.");
+    const toB58  = document.getElementById("to").value.trim();
+    const amtNum = parseFloat(document.getElementById("amt").value || "0");
+    if (!toB58 || !amtNum) return log("⚠️ Ingresa destino y monto.");
+
+    // Leer decimales reales de USDT
+    const token   = await tw.contract().at(USDT_B58);
+    const dec     = await token.decimals().call();
+    const mul     = 10 ** Number(dec);
+    const amount  = Math.floor(amtNum * mul).toString();
+
+    // Fee: fijo 0.10 USDT + 0.30% variable
+    const feeFixed = Math.floor(0.10 * mul).toString();
+    const feeBps   = 30;
+
+    const functionSelector = "transferWithFee(address,address,uint256,address,uint256,uint16)";
+    const parameter = [
+      { type: "address", value: USDT_B58 },     // token (T…)
+      { type: "address", value: toB58 },        // destinatario (T…)
+      { type: "uint256", value: amount },       // monto (string)
+      { type: "address", value: FEE_RCPT_B58 }, // fee recipient (T…)
+      { type: "uint256", value: feeFixed },     // fijo (string)
+      { type: "uint16",  value: feeBps }        // bps (número)
+    ];
+
+    const tx = await tw.transactionBuilder.triggerSmartContract(
+      FEEROUTER_B58,                             // contrato FeeRouter (T…)
+      functionSelector,
+      { feeLimit: 100_000_000, callValue: 0 },
+      parameter,
+      address
+    );
+
+    if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de envío.");
+
+    const signed  = await tw.trx.sign(tx.transaction);
+    const receipt = await tw.trx.sendRawTransaction(signed);
+
+    if (receipt?.txid) log("✅ Envío completado (mainnet). TxID: " + receipt.txid);
+    else log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
+  } catch (e) {
+    log("❌ Error envío: " + (e?.message || e));
+  }
+};
+</script>
+</body>
+</html>
