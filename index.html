@@ -6,24 +6,24 @@
   <title>MVP TRON Gas-Free</title>
 
   <!-- Polyfills antes de TronWeb -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js?v=2"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js?v=2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js?v=3"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/process/0.11.10/process.min.js?v=3"></script>
   <script>
     (function (g) {
-      g.global = g.global || g;              // algunas libs esperan 'global'
-      g.process = g.process || { env: {} };  // shim simple de process
+      g.global = g.global || g;
+      g.process = g.process || { env: {} };
       const B = (g.buffer && g.buffer.Buffer) || g.Buffer;
       if (B) {
         g.Buffer = B;
-        if (!g.Buffer.from)   g.Buffer.from   = function(a, e){ return B.from(a, e); };
-        if (!g.Buffer.alloc)  g.Buffer.alloc  = function(n){ return B.alloc(n); };
+        if (!g.Buffer.from) g.Buffer.from = function(a, e){ return B.from(a, e); };
+        if (!g.Buffer.alloc) g.Buffer.alloc = function(n){ return B.alloc(n); };
         if (!g.Buffer.isBuffer) g.Buffer.isBuffer = function(x){ return B.isBuffer(x); };
       }
     })(window);
   </script>
 
-  <!-- TronWeb (v4 estable) -->
-  <script src="https://cdn.jsdelivr.net/npm/tronweb@4.4.0/dist/TronWeb.js?v=3"></script>
+  <!-- TronWeb v4 (estable para navegador) -->
+  <script src="https://cdn.jsdelivr.net/npm/tronweb@4.4.0/dist/TronWeb.js?v=4"></script>
 
   <style>
     body { background:#0b0b14; color:#eae6ff; font-family:Inter,system-ui,sans-serif; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; min-height:100vh; justify-content:center;}
@@ -61,11 +61,11 @@ const USDT_B58      = "TXLAQ63Xg1NAzckPwKHvzw7CSEmLMEqcdj"; // USDT TRC20 Nile
 let tw, address;
 
 function log(msg){ document.getElementById("log").textContent += "\n" + msg; }
+
 const toHex41 = (b58) => {
-  // Convierte T... → 41... (sin 0x)
   let hx = tw.address.toHex(b58);
   if (hx.startsWith("0x")) hx = hx.slice(2);
-  if (!hx.startsWith("41")) hx = "41" + hx.replace(/^41/, "");
+  if (!hx.startsWith("41")) hx = "41" + hx;
   return hx;
 };
 
@@ -77,19 +77,44 @@ document.getElementById("btnSetPK").onclick = () => {
   log("✅ Wallet cargada: " + address);
 };
 
+// Diagnóstico extendido para aprobar
 document.getElementById("btnApprove").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
 
     const token = await tw.contract().at(USDT_B58);
-    const allowance = BigInt(1_000_000_000_000_000); // alto por MVP
-    const routerHex = toHex41(FEEROUTER_B58);
 
-    log("→ FeeRouter HEX: " + routerHex);
-    const tx = await token.approve(routerHex, allowance).send({ feeLimit: 100_000_000 });
-    log("✅ Approve enviado: " + tx);
+    const routerHex = (addr => {
+      let hx = tw.address.toHex(addr);
+      if (hx.startsWith("0x")) hx = hx.slice(2);
+      return hx.startsWith("41") ? hx : "41" + hx;
+    })(FEEROUTER_B58);
+
+    log("→ FEEROUTER_B58: " + FEEROUTER_B58);
+    log("→ FEEROUTER_HEX: " + routerHex);
+    log("✔ isAddress(B58): " + tw.isAddress(FEEROUTER_B58));
+    log("✔ isAddress(HEX): " + tw.isAddress(routerHex));
+
+    // Intento 1: usando la dirección T...
+    try {
+      const allowance = BigInt(1_000_000_000_000_000);
+      const tx1 = await token.approve(FEEROUTER_B58, allowance).send({ feeLimit: 100_000_000 });
+      return log("✅ Approve (B58) enviado: " + tx1);
+    } catch (e1) {
+      log("⚠️ Approve con B58 falló: " + (e1?.message || e1));
+    }
+
+    // Intento 2: usando dirección 41...
+    try {
+      const allowance = BigInt(1_000_000_000_000_000);
+      const tx2 = await token.approve(routerHex, allowance).send({ feeLimit: 100_000_000 });
+      return log("✅ Approve (HEX) enviado: " + tx2);
+    } catch (e2) {
+      log("❌ Approve con HEX falló: " + (e2?.message || e2));
+    }
+
   } catch (e) {
-    log("❌ Error approve: " + (e && e.message ? e.message : e));
+    log("❌ Error approve general: " + (e?.message || e));
   }
 };
 
@@ -106,13 +131,9 @@ document.getElementById("btnSend").onclick = async () => {
     const amount   = BigInt(Math.floor(amtNum * mul));
 
     const router        = await tw.contract().at(FEEROUTER_B58);
-
-    // Direcciones en HEX para el método del contrato
     const tokenHex      = toHex41(USDT_B58);
     const toHexAddr     = toHex41(toB58);
     const feeRcptHex    = toHex41(FEE_RCPT_B58);
-
-    // Fee: 0.10 USDT fijo + 0.30% variable
     const feeFixed = BigInt(10) * BigInt(mul) / BigInt(100);
     const feeBps   = 30;
 
@@ -122,7 +143,7 @@ document.getElementById("btnSend").onclick = async () => {
 
     log("✅ Envío completado. TxID: " + tx);
   } catch (e) {
-    log("❌ Error envío: " + (e && e.message ? e.message : e));
+    log("❌ Error envío: " + (e?.message || e));
   }
 };
 </script>
