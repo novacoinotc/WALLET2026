@@ -75,7 +75,8 @@ document.getElementById("btnApprove").onclick = async () => {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
     const token = await tw.contract().at(USDT);
     const allowance = BigInt(1_000_000_000_000_000); // grande por MVP
-    const tx = await token.approve(FEEROUTER, allowance).send();
+    const routerHex = tw.address.toHex(FEEROUTER);
+const tx = await token.approve(routerHex, allowance).send();
     log("✅ Approve enviado: " + tx);
   } catch (e) {
     log("❌ Error approve: " + (e && e.message ? e.message : e));
