@@ -53,22 +53,19 @@
   </div>
 
 <script>
+/** Config Nile */
 const TRONGRID      = "https://nile.trongrid.io";
-const FEEROUTER_B58 = "TA8LBPjPTSKfq21owaNgkLzdi68s59yBK";
-const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";
-const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf"; // USDT TRC20 Nile (test)
+const FEEROUTER_B58 = "TA8LBPjPTSKfq21owaNgkLzdi68s59yBK";            // contrato FeeRouter (T…)
+const FEE_RCPT_B58  = "THBLWk8rEsrPuweYbuSSW6vC2i2dg79naL";            // tu cuenta que recibe fee (T…)
+const USDT_B58      = "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf";            // USDT (test) en Nile (T…)
 
+/** Estado */
 let tw, address;
 
+/** Utils UI */
 function log(msg){ document.getElementById("log").textContent += "\n" + msg; }
 
-const toHex41 = (b58) => {
-  let hx = tw.address.toHex(b58);
-  if (hx.startsWith("0x")) hx = hx.slice(2);
-  if (!hx.startsWith("41")) hx = "41" + hx;
-  return hx;
-};
-
+/** Inicializar wallet (no custodial en el navegador) */
 document.getElementById("btnSetPK").onclick = () => {
   const pk = document.getElementById("pk").value.trim();
   if (!pk) return log("⚠️ Ingresa una Private Key de testnet.");
@@ -77,53 +74,48 @@ document.getElementById("btnSetPK").onclick = () => {
   log("✅ Wallet cargada: " + address);
 };
 
-// ===== APPROVE via triggerSmartContract (tipado explícito) =====
+/** Handler: Approve USDT -> FeeRouter (tipado con triggerSmartContract y direcciones T...) */
 document.getElementById("btnApprove").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
 
-    // Datos base
-    const ownerB58  = address;        // quien firma (tu wallet)
-    const tokenB58  = USDT_B58;       // contrato USDT en Nile
-    const spender   = FEEROUTER_B58;  // contrato FeeRouter (spender)
-    const amountStr = "100000000000000"; // 1e14 (ajusta si quieres)
+    const ownerB58   = address;           // tu wallet T...
+    const tokenB58   = USDT_B58;          // contrato USDT en Nile (T…)
+    const spenderB58 = FEEROUTER_B58;     // FeeRouter (T…)
+    const amountStr  = "100000000000000"; // 1e14 (ajusta si quieres)
 
-    // A hex
-    const tokenHex = toHex41(tokenB58);
-    const ownerHex = toHex41(ownerB58);
+    // Diagnóstico
+    log("→ isAddress(owner): "  + tw.isAddress(ownerB58));
+    log("→ isAddress(token): "  + tw.isAddress(tokenB58));
+    log("→ isAddress(spender): "+ tw.isAddress(spenderB58));
 
     const functionSelector = "approve(address,uint256)";
     const parameter = [
-      { type: "address", value: spender },    // T... (TronWeb lo convierte)
-      { type: "uint256", value: amountStr }   // como string
+      { type: "address", value: spenderB58 }, // pasamos Base58 (TronWeb codifica)
+      { type: "uint256", value: amountStr }   // string
     ];
 
     const tx = await tw.transactionBuilder.triggerSmartContract(
-      tokenHex,
+      tokenB58,                               // contrato en Base58
       functionSelector,
       { feeLimit: 100_000_000, callValue: 0 },
       parameter,
-      ownerHex
+      ownerB58                                // caller en Base58
     );
 
-    if (!tx || !tx.transaction) {
-      return log("❌ No se pudo construir la transacción de approve.");
-    }
+    if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de approve.");
 
     const signed  = await tw.trx.sign(tx.transaction);
     const receipt = await tw.trx.sendRawTransaction(signed);
 
-    if (receipt?.txid) {
-      log("✅ Approve enviado: " + receipt.txid);
-    } else {
-      log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
-    }
+    if (receipt?.txid) log("✅ Approve enviado: " + receipt.txid);
+    else log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
   } catch (e) {
     log("❌ Error approve (trigger): " + (e?.message || e));
   }
 };
 
-// ===== SEND with fee (puede quedarse con la API de alto nivel) =====
+/** Handler: Enviar con comisión usando FeeRouter (triggerSmartContract) */
 document.getElementById("btnSend").onclick = async () => {
   try {
     if (!tw) return log("⚠️ Carga primero la Private Key.");
@@ -131,24 +123,42 @@ document.getElementById("btnSend").onclick = async () => {
     const amtNum = parseFloat(document.getElementById("amt").value || "0");
     if (!toB58 || !amtNum) return log("⚠️ Ingresa destino y monto.");
 
-    const token    = await tw.contract().at(USDT_B58);
-    const decimals = await token.decimals().call();
-    const mul      = 10 ** Number(decimals);
-    const amount   = Math.floor(amtNum * mul).toString();
+    // Leer decimales desde el contrato USDT
+    const token   = await tw.contract().at(USDT_B58);
+    const dec     = await token.decimals().call();
+    const mul     = 10 ** Number(dec);
+    const amount  = Math.floor(amtNum * mul).toString();
 
-    const router      = await tw.contract().at(FEEROUTER_B58);
-    const tokenHex    = toHex41(USDT_B58);
-    const toHexAddr   = toHex41(toB58);
-    const feeRcptHex  = toHex41(FEE_RCPT_B58);
+    // Fee: 0.10 USDT fijo + 0.30% variable
+    const feeFixed = Math.floor(0.10 * mul).toString(); // como string
+    const feeBps   = 30;                                // uint16
 
-    const feeFixed = (0.10 * mul).toString(); // 0.10 USDT
-    const feeBps   = 30;                      // 0.30%
+    // Parámetros del método transferWithFee(address,address,uint256,address,uint256,uint16)
+    const functionSelector = "transferWithFee(address,address,uint256,address,uint256,uint16)";
+    const parameter = [
+      { type: "address", value: USDT_B58 },    // token (T…)
+      { type: "address", value: toB58 },       // destinatario (T…)
+      { type: "uint256", value: amount },      // monto en unidades mínimas (string)
+      { type: "address", value: FEE_RCPT_B58 },// fee recipient (T…)
+      { type: "uint256", value: feeFixed },    // fijo en unidades mínimas (string)
+      { type: "uint16",  value: feeBps }       // basis points (número)
+    ];
 
-    const tx = await router.transferWithFee(
-      tokenHex, toHexAddr, amount, feeRcptHex, feeFixed, feeBps
-    ).send({ feeLimit: 100_000_000 });
+    const tx = await tw.transactionBuilder.triggerSmartContract(
+      FEEROUTER_B58,                           // contrato FeeRouter en Base58
+      functionSelector,
+      { feeLimit: 100_000_000, callValue: 0 },
+      parameter,
+      address                                  // tu wallet (Base58)
+    );
 
-    log("✅ Envío completado. TxID: " + tx);
+    if (!tx || !tx.transaction) return log("❌ No se pudo construir la tx de envío.");
+
+    const signed  = await tw.trx.sign(tx.transaction);
+    const receipt = await tw.trx.sendRawTransaction(signed);
+
+    if (receipt?.txid) log("✅ Envío completado. TxID: " + receipt.txid);
+    else log("⚠️ Respuesta sin txid: " + JSON.stringify(receipt));
   } catch (e) {
     log("❌ Error envío: " + (e?.message || e));
   }
